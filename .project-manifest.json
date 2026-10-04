@@ -113,6 +113,26 @@
         "domain",
         "storage"
       ]
+    },
+    {
+      "id": "abort-vessel-cleaning",
+      "name": "Abort with structured reason and route the vessel",
+      "entry": "POST /v1/runs/{id}/abort",
+      "steps": [
+        "supply a structured reason and planned-volume disposition",
+        "release the vessel before start or schedule cleaning after start",
+        "fix the abort snapshot to the abort instant",
+        "finish cleaning and read consistent run and vessel views"
+      ],
+      "success": "returns the fixed abort record with the automatic vessel disposition",
+      "failure": "returns a stable not-found, state, revision, or invalid-input error without partial writes",
+      "verification": "the check issues real HTTP requests for pre-start and post-start aborts and verifies atomic failures and view consistency",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
     }
   ]
 }

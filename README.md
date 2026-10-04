@@ -94,6 +94,30 @@ Run workflow:
 - `POST /v1/runs/{id}/complete`
 - `POST /v1/runs/{id}/abort`
 
+Aborting a run requires a structured JSON body. `reason` must be one of
+`contamination`, `equipment_failure`, `quality_deviation`,
+`temperature_excursion`, `plan_change`, or `other`; `reason_detail` is
+optional. `lost_volume_liters` and `recovered_volume_liters` are non-negative
+and must together account for `planned_volume_liters`; when recovered volume is
+positive, `recovery_destination` must be one of `blend_back`,
+`reuse_next_batch`, `distillation`, `drain`, or `other`. The returned run
+includes an `abort` snapshot fixed at that moment (planned volume, observation
+count, whether the run had started, the vessel, and the automatic vessel
+disposition). A run aborted before its formal start releases the vessel to
+`available`; a run aborted after start puts the vessel into `cleaning` with an
+abort cleaning context, and `finish-cleaning` releases it once the run is
+complete or aborted.
+
+```json
+{
+  "reason": "contamination",
+  "reason_detail": "visible mold on the krausen",
+  "lost_volume_liters": 150.0,
+  "recovered_volume_liters": 30.0,
+  "recovery_destination": "distillation"
+}
+```
+
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
 
@@ -115,11 +139,16 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check abort-vessel-cleaning
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
 handler on a loopback listener, issues JSON requests, verifies success and
-failure behavior, and removes its temporary data.
+failure behavior, and removes its temporary data. The abort check covers
+structured payload validation, atomic rejection of stale and duplicate aborts
+and missing runs, the fixed abort snapshot, automatic pre-start release and
+post-start cleaning routing, finish-cleaning release, and consistent run
+detail, run list, and vessel list views.
 
 ## Persistence And Recovery
 

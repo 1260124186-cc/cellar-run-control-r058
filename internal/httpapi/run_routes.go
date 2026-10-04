@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/service"
 )
 
@@ -24,6 +25,14 @@ type observationRequest struct {
 	TemperatureC float64   `json:"temperature_c"`
 	ObservedAt   time.Time `json:"observed_at"`
 	Note         string    `json:"note"`
+}
+
+type abortRunRequest struct {
+	Reason              string  `json:"reason"`
+	ReasonDetail        string  `json:"reason_detail"`
+	LostVolumeL         float64 `json:"lost_volume_liters"`
+	RecoveredVolumeL    float64 `json:"recovered_volume_liters"`
+	RecoveryDestination string  `json:"recovery_destination"`
 }
 
 func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
@@ -145,12 +154,22 @@ func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 	})
 
 	mux.HandleFunc("POST /v1/runs/{id}/abort", func(response http.ResponseWriter, request *http.Request) {
+		body, err := decodeJSON[abortRunRequest](response, request)
+		if !handleDecode(response, err) {
+			return
+		}
 		expected, err := expectedVersion(request)
 		if !handleDecode(response, err) {
 			return
 		}
-		run, vessel, err := app.AbortRun(request.PathValue("id"),
-			service.VersionInput{ExpectedVersion: expected})
+		run, vessel, err := app.AbortRun(request.PathValue("id"), service.AbortRunInput{
+			ExpectedVersion:     expected,
+			Reason:              domain.AbortReason(body.Reason),
+			ReasonDetail:        body.ReasonDetail,
+			LostVolumeL:         body.LostVolumeL,
+			RecoveredVolumeL:    body.RecoveredVolumeL,
+			RecoveryDestination: domain.RecoveryDestination(body.RecoveryDestination),
+		})
 		if err != nil {
 			writeDomainError(response, err)
 			return

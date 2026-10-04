@@ -47,7 +47,7 @@ func (s *Service) GetVessel(id string) (domain.Vessel, error) {
 		if !ok {
 			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 		}
-		found = vessel
+		found = vessel.Clone()
 		return nil
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func (s *Service) ListVessels() ([]domain.Vessel, error) {
 	err := s.store.View(func(snapshot domain.Snapshot) error {
 		vessels = make([]domain.Vessel, 0, len(snapshot.Vessels))
 		for _, vessel := range snapshot.Vessels {
-			vessels = append(vessels, vessel)
+			vessels = append(vessels, vessel.Clone())
 		}
 		return nil
 	})

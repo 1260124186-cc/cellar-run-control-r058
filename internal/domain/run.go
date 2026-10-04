@@ -25,6 +25,7 @@ type FermentationRun struct {
 	EndedAt        *time.Time           `json:"ended_at,omitempty"`
 	Observations   []GravityObservation `json:"observations"`
 	Metrics        *RunMetrics          `json:"metrics,omitempty"`
+	AbortRecord    *AbortRecord         `json:"abort,omitempty"`
 	Version        int64                `json:"version"`
 	CreatedAt      time.Time            `json:"created_at"`
 	UpdatedAt      time.Time            `json:"updated_at"`
@@ -48,6 +49,10 @@ func (r FermentationRun) Clone() FermentationRun {
 	if r.Metrics != nil {
 		value := *r.Metrics
 		cloned.Metrics = &value
+	}
+	if r.AbortRecord != nil {
+		value := r.AbortRecord.Clone()
+		cloned.AbortRecord = &value
 	}
 	return cloned
 }
@@ -152,11 +157,46 @@ func (r *FermentationRun) Complete(originalGravity float64, now time.Time) error
 	return nil
 }
 
-func (r *FermentationRun) Abort(now time.Time) error {
+// EnsureAbortable reports whether the run can accept an abort. Completed and
+// aborted runs are terminal and reject every further abort.
+func (r FermentationRun) EnsureAbortable() error {
 	if r.State == RunCompleted || r.State == RunAborted {
 		return NewError(CodeRunState, "completed or aborted runs cannot be aborted")
 	}
+	return nil
+}
+
+// Abort applies a structured abort. The supplied input must already describe
+// the reason and planned-volume handling; this method fixes the abort record
+// to the run facts visible at this instant.
+func (r *FermentationRun) Abort(input AbortInput, disposition VesselDisposition, now time.Time) error {
+	if err := r.EnsureAbortable(); err != nil {
+		return err
+	}
+	if err := input.Validate(r.PlannedVolumeL); err != nil {
+		return err
+	}
 	stamp := now.UTC()
+	var vesselID *string
+	if r.VesselID != nil {
+		value := *r.VesselID
+		vesselID = &value
+	}
+	record := AbortRecord{
+		Reason:              input.Reason,
+		ReasonDetail:        input.ReasonDetail,
+		LostVolumeL:         input.LostVolumeL,
+		RecoveredVolumeL:    input.RecoveredVolumeL,
+		RecoveryDestination: input.RecoveryDestination,
+		PlannedVolumeL:      r.PlannedVolumeL,
+		ObservationCount:    len(r.Observations),
+		HadStarted:          r.StartedAt != nil,
+		VesselID:            vesselID,
+		VesselDisposition:   disposition,
+		AbortedAt:           stamp,
+		RunVersion:          r.Version,
+	}
+	r.AbortRecord = &record
 	r.State = RunAborted
 	r.EndedAt = &stamp
 	r.UpdatedAt = stamp

@@ -15,10 +15,11 @@ type formulaView struct {
 }
 
 type vesselView struct {
-	ID          string             `json:"id"`
-	State       domain.VesselState `json:"state"`
-	Version     int64              `json:"version"`
-	ActiveRunID *string            `json:"active_run_id"`
+	ID          string                  `json:"id"`
+	State       domain.VesselState      `json:"state"`
+	Version     int64                   `json:"version"`
+	ActiveRunID *string                 `json:"active_run_id"`
+	Cleaning    *domain.CleaningContext `json:"cleaning"`
 }
 
 type runView struct {
@@ -28,6 +29,7 @@ type runView struct {
 	VesselID     *string                     `json:"vessel_id"`
 	Observations []domain.GravityObservation `json:"observations"`
 	Metrics      *domain.RunMetrics          `json:"metrics"`
+	AbortRecord  *domain.AbortRecord         `json:"abort"`
 }
 
 type pairView struct {

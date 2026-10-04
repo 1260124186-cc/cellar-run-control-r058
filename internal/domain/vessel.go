@@ -12,15 +12,48 @@ const (
 	VesselRetired   VesselState = "retired"
 )
 
+// CleaningContext records why a vessel is waiting for cleaning. It stays with
+// the vessel while the associated run is finished and is cleared once cleaning
+// completes.
+type CleaningContext struct {
+	RunID   string          `json:"run_id"`
+	Since   time.Time       `json:"since"`
+	Trigger CleaningTrigger `json:"trigger"`
+	Reason  *AbortReason    `json:"reason,omitempty"`
+}
+
+func (c CleaningContext) Clone() CleaningContext {
+	cloned := c
+	if c.Reason != nil {
+		value := *c.Reason
+		cloned.Reason = &value
+	}
+	return cloned
+}
+
 type Vessel struct {
-	ID          string      `json:"id"`
-	Code        string      `json:"code"`
-	CapacityL   float64     `json:"capacity_liters"`
-	State       VesselState `json:"state"`
-	ActiveRunID *string     `json:"active_run_id,omitempty"`
-	Version     int64       `json:"version"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	ID          string           `json:"id"`
+	Code        string           `json:"code"`
+	CapacityL   float64          `json:"capacity_liters"`
+	State       VesselState      `json:"state"`
+	ActiveRunID *string          `json:"active_run_id,omitempty"`
+	Cleaning    *CleaningContext `json:"cleaning,omitempty"`
+	Version     int64            `json:"version"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
+func (v Vessel) Clone() Vessel {
+	cloned := v
+	if v.ActiveRunID != nil {
+		value := *v.ActiveRunID
+		cloned.ActiveRunID = &value
+	}
+	if v.Cleaning != nil {
+		value := v.Cleaning.Clone()
+		cloned.Cleaning = &value
+	}
+	return cloned
 }
 
 func (v Vessel) Validate() error {
@@ -56,13 +89,27 @@ func (v *Vessel) StartRun(runID string, now time.Time) error {
 	return nil
 }
 
-func (v *Vessel) StartCleaning(runID string, now time.Time) error {
+// StartCleaning moves the vessel into cleaning and fixes the context that
+// explains why (completion or abort). The optional abort reason is recorded
+// only for aborts.
+func (v *Vessel) StartCleaning(runID string, trigger CleaningTrigger, reason *AbortReason, now time.Time) error {
 	if (v.State != VesselInUse && v.State != VesselReserved) ||
 		v.ActiveRunID == nil || *v.ActiveRunID != runID {
 		return NewError(CodeVesselState, "vessel cannot enter cleaning for this run")
 	}
+	stamp := now.UTC()
+	context := CleaningContext{
+		RunID:   runID,
+		Since:   stamp,
+		Trigger: trigger,
+	}
+	if reason != nil {
+		value := *reason
+		context.Reason = &value
+	}
 	v.State = VesselCleaning
-	v.UpdatedAt = now.UTC()
+	v.Cleaning = &context
+	v.UpdatedAt = stamp
 	v.Version++
 	return nil
 }
@@ -73,6 +120,7 @@ func (v *Vessel) FinishCleaning(now time.Time) error {
 	}
 	v.State = VesselAvailable
 	v.ActiveRunID = nil
+	v.Cleaning = nil
 	v.UpdatedAt = now.UTC()
 	v.Version++
 	return nil

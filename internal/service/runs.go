@@ -140,10 +140,17 @@ func (s *Service) StartRun(
 
 func (s *Service) AbortRun(
 	id string,
-	input VersionInput,
+	input AbortRunInput,
 ) (domain.FermentationRun, domain.Vessel, error) {
 	var updatedRun domain.FermentationRun
 	var updatedVessel domain.Vessel
+	abortInput := domain.AbortInput{
+		Reason:              input.Reason,
+		ReasonDetail:        input.ReasonDetail,
+		LostVolumeL:         input.LostVolumeL,
+		RecoveredVolumeL:    input.RecoveredVolumeL,
+		RecoveryDestination: input.RecoveryDestination,
+	}
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
 		run, ok := snapshot.Runs[id]
 		if !ok {
@@ -152,25 +159,60 @@ func (s *Service) AbortRun(
 		if err := s.checkExpected(run.Version, input.ExpectedVersion); err != nil {
 			return err
 		}
-		hadStarted := run.HadStarted()
-		if err := run.Abort(s.clock.Now()); err != nil {
+		// Terminal runs reject every abort before any payload or vessel work,
+		// so a repeat fails atomically with the run-state error.
+		if err := run.EnsureAbortable(); err != nil {
 			return err
 		}
+
+		// Validate the operator payload against this run before any state
+		// changes, so invalid input fails atomically without side effects.
+		if err := abortInput.Validate(run.PlannedVolumeL); err != nil {
+			return err
+		}
+
+		// Resolve the automatic vessel disposition using the rules in place
+		// before and after a formal start, before mutating either aggregate.
+		disposition := domain.VesselUnassigned
+		var vessel *domain.Vessel
 		if run.VesselID != nil {
-			vessel, ok := snapshot.Vessels[*run.VesselID]
-			if !ok {
+			candidate, found := snapshot.Vessels[*run.VesselID]
+			if !found {
 				return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 			}
-			if hadStarted {
-				if err := vessel.StartCleaning(run.ID, s.clock.Now()); err != nil {
+			vessel = &candidate
+			switch {
+			case run.HadStarted():
+				disposition = domain.VesselScheduledCleaning
+			case vessel.ActiveRunID != nil && *vessel.ActiveRunID == run.ID:
+				disposition = domain.VesselReleased
+			default:
+				return domain.NewError(domain.CodeVesselState,
+					"run vessel is not associated with this run")
+			}
+		}
+
+		now := s.clock.Now()
+		if err := run.Abort(abortInput, disposition, now); err != nil {
+			return err
+		}
+
+		if vessel != nil {
+			switch disposition {
+			case domain.VesselScheduledCleaning:
+				reason := abortInput.Reason
+				if err := vessel.StartCleaning(run.ID, domain.CleaningFromAbort, &reason, now); err != nil {
 					return err
 				}
-			} else if err := vessel.ReleaseReservation(run.ID, s.clock.Now()); err != nil {
-				return err
+			case domain.VesselReleased:
+				if err := vessel.ReleaseReservation(run.ID, now); err != nil {
+					return err
+				}
 			}
-			snapshot.Vessels[vessel.ID] = vessel
-			updatedVessel = vessel
+			snapshot.Vessels[vessel.ID] = vessel.Clone()
+			updatedVessel = vessel.Clone()
 		}
+
 		snapshot.Runs[id] = run.Clone()
 		updatedRun = run.Clone()
 		return nil

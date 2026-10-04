@@ -58,14 +58,19 @@ States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 - Completion moves an in-use vessel to cleaning.
 - Cleaning can be finished only when the associated run is complete or
   aborted.
-- Finishing cleaning releases the vessel to available.
+- While a vessel waits for cleaning it carries a fixed cleaning context:
+  the run identifier, the moment it entered cleaning, and whether it was
+  triggered by completion or abort (aborts also record the abort reason).
+- Finishing cleaning releases the vessel to available and clears the
+  cleaning context.
 - A vessel with an active run cannot be retired or directly reserved.
 
 ### FermentationRun
 
 A run contains an identifier, unique run code, an approved formula identifier,
 an optional vessel identifier, planned volume, notes, lifecycle state,
-timetable, ordered observations, final metrics, version, and timestamps.
+timetable, ordered observations, final metrics, an optional abort record,
+version, and timestamps.
 
 States are `planned`, `reserved`, `fermenting`, `conditioning`, `completed`,
 and `aborted`.
@@ -79,9 +84,26 @@ and `aborted`.
 - Completion computes apparent attenuation and estimated alcohol by volume from
   the formula target original gravity and the last observation.
 - Completion moves the vessel to cleaning without losing its run association.
-- A non-completed run can be aborted. Aborting before fermentation releases an
-  available vessel; aborting after fermentation schedules the vessel for
-  cleaning.
+- A non-completed run can be aborted, but only with a structured abort request
+  that supplies a reason and a planned-volume disposition before the state
+  changes. The reason is one of `contamination`, `equipment_failure`,
+  `quality_deviation`, `temperature_excursion`, `plan_change`, or `other`, with
+  an optional detail note. Lost volume and recovered volume are non-negative
+  liters, their sum must account for the planned volume, and a recovery
+  destination is required exactly when recovered volume is positive; the
+  destination is one of `blend_back`, `reuse_next_batch`, `distillation`,
+  `drain`, or `other`.
+- Aborting fixes an immutable abort snapshot at the abort instant: the supplied
+  reason and volume disposition, the planned volume, the observation count,
+  whether fermentation had started, the associated vessel, the automatic vessel
+  disposition chosen, the abort timestamp, and the run version before the
+  abort. Completed runs have no abort snapshot and aborted runs never change
+  theirs.
+- Aborting before a formal start releases the reserved vessel straight back to
+  available (`released_available`); aborting after a start schedules the vessel
+  for cleaning (`scheduled_cleaning`); a run without a vessel records `none`.
+  These automatic vessel rules keep the pre-start/post-start semantics that
+  already existed; the operator cannot choose the disposition.
 - Completed and aborted runs are immutable.
 - A run can carry at most 500 observations.
 
@@ -150,6 +172,31 @@ transitions return stable failures without changing persisted state.
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
 
+### 4. Structured Abort And Vessel Cleaning
+
+Public entry points are:
+
+- `POST /v1/runs/{id}/abort`
+- `POST /v1/vessels/{id}/finish-cleaning`
+- `GET /v1/runs/{id}`
+- `GET /v1/vessels/{id}`
+
+The operator aborts a run only after supplying a structured reason and the
+planned-volume disposition. Before a formal start the reserved vessel is
+released to available; after a start the vessel is scheduled for cleaning and
+can only be released once cleaning finishes. The fixed abort snapshot is
+returned alongside the run, is readable from run detail and the run list, and
+remains stable after the vessel is released.
+
+A missing run returns `run_not_found`. An expired `X-Expected-Version`, a
+duplicate abort, an abort of a completed run, an unknown reason, or volume that
+does not account for the planned volume all fail atomically inside the same
+snapshot transaction: no run or vessel state is published and no partial vessel
+routing occurs.
+
+This path crosses HTTP protocol handling, application orchestration, domain
+rules, snapshot storage, and resource lifecycle.
+
 ## Modules
 
 - `cmd/fermentctl`: executable entry point for the HTTP service and bounded
@@ -217,6 +264,7 @@ behavior, and exit without external services:
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check abort-vessel-cleaning`
 
 ## Scope Limits
 

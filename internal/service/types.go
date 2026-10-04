@@ -50,6 +50,15 @@ type ObservationInput struct {
 	Note         string
 }
 
+type AbortRunInput struct {
+	ExpectedVersion     *int64
+	Reason              domain.AbortReason
+	ReasonDetail        string
+	LostVolumeL         float64
+	RecoveredVolumeL    float64
+	RecoveryDestination domain.RecoveryDestination
+}
+
 type FinishCleaningInput struct {
 	ExpectedVersion *int64
 }
