@@ -53,3 +53,14 @@ type ObservationInput struct {
 type FinishCleaningInput struct {
 	ExpectedVersion *int64
 }
+
+// AbortRunInput carries the operator's structured abort entry.
+type AbortRunInput struct {
+	ExpectedVersion     *int64
+	ReasonCode          string
+	ReasonDetail        string
+	LostVolumeL         float64
+	RecoveredVolumeL    float64
+	RecoveryDestination string
+	RecoveryNote        string
+}

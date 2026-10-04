@@ -26,6 +26,15 @@ type observationRequest struct {
 	Note         string    `json:"note"`
 }
 
+type abortRunRequest struct {
+	ReasonCode          string  `json:"reason_code"`
+	ReasonDetail        string  `json:"reason_detail"`
+	LostVolumeL         float64 `json:"lost_volume_liters"`
+	RecoveredVolumeL    float64 `json:"recovered_volume_liters"`
+	RecoveryDestination string  `json:"recovery_destination"`
+	RecoveryNote        string  `json:"recovery_note"`
+}
+
 func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 	mux.HandleFunc("POST /v1/runs", func(response http.ResponseWriter, request *http.Request) {
 		body, err := decodeJSON[createRunRequest](response, request)
@@ -145,16 +154,31 @@ func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 	})
 
 	mux.HandleFunc("POST /v1/runs/{id}/abort", func(response http.ResponseWriter, request *http.Request) {
+		body, err := decodeJSON[abortRunRequest](response, request)
+		if !handleDecode(response, err) {
+			return
+		}
 		expected, err := expectedVersion(request)
 		if !handleDecode(response, err) {
 			return
 		}
-		run, vessel, err := app.AbortRun(request.PathValue("id"),
-			service.VersionInput{ExpectedVersion: expected})
+		result, err := app.AbortRun(request.PathValue("id"), service.AbortRunInput{
+			ExpectedVersion:     expected,
+			ReasonCode:          body.ReasonCode,
+			ReasonDetail:        body.ReasonDetail,
+			LostVolumeL:         body.LostVolumeL,
+			RecoveredVolumeL:    body.RecoveredVolumeL,
+			RecoveryDestination: body.RecoveryDestination,
+			RecoveryNote:        body.RecoveryNote,
+		})
 		if err != nil {
 			writeDomainError(response, err)
 			return
 		}
-		writeJSON(response, http.StatusOK, map[string]any{"run": run, "vessel": vessel})
+		payload := map[string]any{"run": result.Run}
+		if result.Vessel != nil {
+			payload["vessel"] = result.Vessel
+		}
+		writeJSON(response, http.StatusOK, payload)
 	})
 }

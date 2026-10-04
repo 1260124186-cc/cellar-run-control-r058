@@ -14,20 +14,44 @@ type formulaView struct {
 	Steps   []domain.FormulaStep `json:"steps"`
 }
 
+type vesselRunSummaryView struct {
+	RunID           string                  `json:"run_id"`
+	RunCode         string                  `json:"run_code"`
+	State           domain.RunState         `json:"state"`
+	AbortReasonCode *domain.AbortReasonCode `json:"abort_reason_code"`
+	AbortedAt       *time.Time              `json:"aborted_at"`
+}
+
 type vesselView struct {
-	ID          string             `json:"id"`
-	State       domain.VesselState `json:"state"`
-	Version     int64              `json:"version"`
-	ActiveRunID *string            `json:"active_run_id"`
+	ID          string                `json:"id"`
+	State       domain.VesselState    `json:"state"`
+	Version     int64                 `json:"version"`
+	ActiveRunID *string               `json:"active_run_id"`
+	ActiveRun   *vesselRunSummaryView `json:"active_run"`
+}
+
+type abortRecordView struct {
+	ReasonCode          domain.AbortReasonCode     `json:"reason_code"`
+	ReasonDetail        string                     `json:"reason_detail"`
+	PlannedVolumeL      float64                    `json:"planned_volume_liters"`
+	LostVolumeL         float64                    `json:"lost_volume_liters"`
+	RecoveredVolumeL    float64                    `json:"recovered_volume_liters"`
+	UnaccountedVolumeL  float64                    `json:"unaccounted_volume_liters"`
+	RecoveryDestination domain.RecoveryDestination `json:"recovery_destination"`
+	HadStarted          bool                       `json:"had_started"`
+	VesselStateAfter    *domain.VesselState        `json:"vessel_state_after"`
+	AbortedAt           time.Time                  `json:"aborted_at"`
 }
 
 type runView struct {
 	ID           string                      `json:"id"`
+	Code         string                      `json:"code"`
 	State        domain.RunState             `json:"state"`
 	Version      int64                       `json:"version"`
 	VesselID     *string                     `json:"vessel_id"`
 	Observations []domain.GravityObservation `json:"observations"`
 	Metrics      *domain.RunMetrics          `json:"metrics"`
+	Abort        *abortRecordView            `json:"abort"`
 }
 
 type pairView struct {

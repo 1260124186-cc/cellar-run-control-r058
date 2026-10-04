@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type RunState string
 
@@ -25,6 +28,7 @@ type FermentationRun struct {
 	EndedAt        *time.Time           `json:"ended_at,omitempty"`
 	Observations   []GravityObservation `json:"observations"`
 	Metrics        *RunMetrics          `json:"metrics,omitempty"`
+	Abort          *AbortRecord         `json:"abort,omitempty"`
 	Version        int64                `json:"version"`
 	CreatedAt      time.Time            `json:"created_at"`
 	UpdatedAt      time.Time            `json:"updated_at"`
@@ -48,6 +52,10 @@ func (r FermentationRun) Clone() FermentationRun {
 	if r.Metrics != nil {
 		value := *r.Metrics
 		cloned.Metrics = &value
+	}
+	if r.Abort != nil {
+		value := r.Abort.clone()
+		cloned.Abort = &value
 	}
 	return cloned
 }
@@ -152,11 +160,44 @@ func (r *FermentationRun) Complete(originalGravity float64, now time.Time) error
 	return nil
 }
 
-func (r *FermentationRun) Abort(now time.Time) error {
+// ApplyAbort terminates an open run. The supplied decision is validated before
+// any state changes, and the abort snapshot is fixed to the supplied timestamp
+// so it matches the vessel routing performed in the same transaction.
+//
+// hadStarted and vesselBefore/vesselAfter describe the automatic vessel
+// routing the service applies in this same transaction: before the formal run
+// start a vessel is released to available, after start it is scheduled for
+// cleaning. They are recorded, never decided, here.
+func (r *FermentationRun) ApplyAbort(
+	decision AbortDecision,
+	hadStarted bool,
+	vesselBefore, vesselAfter *VesselState,
+	now time.Time,
+) error {
 	if r.State == RunCompleted || r.State == RunAborted {
 		return NewError(CodeRunState, "completed or aborted runs cannot be aborted")
 	}
+	if err := decision.Validate(r.PlannedVolumeL); err != nil {
+		return err
+	}
 	stamp := now.UTC()
+	record := AbortRecord{
+		ReasonCode:          decision.ReasonCode,
+		ReasonDetail:        strings.TrimSpace(decision.ReasonDetail),
+		PlannedVolumeL:      r.PlannedVolumeL,
+		LostVolumeL:         decision.LostVolumeL,
+		RecoveredVolumeL:    decision.RecoveredVolumeL,
+		UnaccountedVolumeL:  round2(r.PlannedVolumeL - decision.LostVolumeL - decision.RecoveredVolumeL),
+		RecoveryDestination: decision.RecoveryDestination,
+		RecoveryNote:        strings.TrimSpace(decision.RecoveryNote),
+		RunStateBefore:      r.State,
+		HadStarted:          hadStarted,
+		VesselID:            r.VesselID,
+		VesselStateBefore:   vesselBefore,
+		VesselStateAfter:    vesselAfter,
+		AbortedAt:           stamp,
+	}
+	r.Abort = &record
 	r.State = RunAborted
 	r.EndedAt = &stamp
 	r.UpdatedAt = stamp

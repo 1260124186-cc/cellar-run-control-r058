@@ -2,6 +2,7 @@ package service
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
@@ -138,12 +139,18 @@ func (s *Service) StartRun(
 	return updatedRun, updatedVessel, nil
 }
 
+// AbortResult reports both the aborted run and the vessel view explaining
+// where the vessel went. Vessel is nil when the run never reserved one.
+type AbortResult struct {
+	Run    domain.FermentationRun
+	Vessel *VesselView
+}
+
 func (s *Service) AbortRun(
 	id string,
-	input VersionInput,
-) (domain.FermentationRun, domain.Vessel, error) {
-	var updatedRun domain.FermentationRun
-	var updatedVessel domain.Vessel
+	input AbortRunInput,
+) (AbortResult, error) {
+	var result AbortResult
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
 		run, ok := snapshot.Runs[id]
 		if !ok {
@@ -152,33 +159,70 @@ func (s *Service) AbortRun(
 		if err := s.checkExpected(run.Version, input.ExpectedVersion); err != nil {
 			return err
 		}
-		hadStarted := run.HadStarted()
-		if err := run.Abort(s.clock.Now()); err != nil {
-			return err
+		decision := domain.AbortDecision{
+			ReasonCode:          domain.AbortReasonCode(strings.TrimSpace(input.ReasonCode)),
+			ReasonDetail:        input.ReasonDetail,
+			LostVolumeL:         input.LostVolumeL,
+			RecoveredVolumeL:    input.RecoveredVolumeL,
+			RecoveryDestination: domain.RecoveryDestination(strings.TrimSpace(input.RecoveryDestination)),
+			RecoveryNote:        input.RecoveryNote,
 		}
+
+		now := s.clock.Now().UTC()
+		hadStarted := run.HadStarted()
+
+		var vesselBefore, vesselAfter *domain.VesselState
+		var affectedVessel *domain.Vessel
 		if run.VesselID != nil {
 			vessel, ok := snapshot.Vessels[*run.VesselID]
 			if !ok {
 				return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 			}
+			before := vessel.State
+			vesselBefore = &before
 			if hadStarted {
-				if err := vessel.StartCleaning(run.ID, s.clock.Now()); err != nil {
+				// Aborting after formal start schedules the vessel for cleaning;
+				// the run association is retained until cleaning finishes.
+				after := domain.VesselCleaning
+				vesselAfter = &after
+				if err := run.ApplyAbort(decision, hadStarted, vesselBefore, vesselAfter, now); err != nil {
 					return err
 				}
-			} else if err := vessel.ReleaseReservation(run.ID, s.clock.Now()); err != nil {
+				if err := vessel.StartCleaning(run.ID, now); err != nil {
+					return err
+				}
+			} else {
+				// Aborting before formal start releases the vessel immediately.
+				after := domain.VesselAvailable
+				vesselAfter = &after
+				if err := run.ApplyAbort(decision, hadStarted, vesselBefore, vesselAfter, now); err != nil {
+					return err
+				}
+				if err := vessel.ReleaseReservation(run.ID, now); err != nil {
+					return err
+				}
+			}
+			affectedVessel = &vessel
+		} else {
+			if err := run.ApplyAbort(decision, hadStarted, nil, nil, now); err != nil {
 				return err
 			}
-			snapshot.Vessels[vessel.ID] = vessel
-			updatedVessel = vessel
 		}
+		// Persist the run before building the vessel view so it reads the same
+		// abort snapshot that is about to be committed.
 		snapshot.Runs[id] = run.Clone()
-		updatedRun = run.Clone()
+		result.Run = run.Clone()
+		if affectedVessel != nil {
+			snapshot.Vessels[affectedVessel.ID] = *affectedVessel
+			view := vesselView(*snapshot, *affectedVessel)
+			result.Vessel = &view
+		}
 		return nil
 	})
 	if err != nil {
-		return domain.FermentationRun{}, domain.Vessel{}, err
+		return AbortResult{}, err
 	}
-	return updatedRun, updatedVessel, nil
+	return result, nil
 }
 
 func (s *Service) GetRun(id string) (domain.FermentationRun, error) {

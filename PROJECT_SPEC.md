@@ -58,8 +58,12 @@ States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 - Completion moves an in-use vessel to cleaning.
 - Cleaning can be finished only when the associated run is complete or
   aborted.
-- Finishing cleaning releases the vessel to available.
+- Finishing cleaning releases the vessel to available and clears its run
+  association.
 - A vessel with an active run cannot be retired or directly reserved.
+- Vessel detail and list responses mirror the vessel and, while it is
+  associated with a run, embed a summary of that run (code, state, and abort
+  reason) so the vessel can explain why it is cleaning or was released.
 
 ### FermentationRun
 
@@ -79,10 +83,26 @@ and `aborted`.
 - Completion computes apparent attenuation and estimated alcohol by volume from
   the formula target original gravity and the last observation.
 - Completion moves the vessel to cleaning without losing its run association.
-- A non-completed run can be aborted. Aborting before fermentation releases an
-  available vessel; aborting after fermentation schedules the vessel for
-  cleaning.
-- Completed and aborted runs are immutable.
+- A non-completed run can be aborted. Aborting is a structured action: the
+  operator must supply a reason code (`contamination`, `off_flavor`,
+  `stalled_fermentation`, `equipment_failure`, `process_error`, `other`), and
+  the planned volume disposition as lost volume and recovered volume. A
+  recovery destination (`reworked_to_blend`, `separated_for_distilling`,
+  `diverted_to_waste`, `held_for_qa_review`, `released_as_second_product`) is
+  required exactly when a positive volume was recovered. Lost plus recovered
+  volume cannot exceed the planned volume; the remaining volume is recorded as
+  unaccounted. Reason `other` requires a free-text detail.
+- An abort fixes an immutable snapshot at the abort moment: the reason, the
+  volume disposition, the run state before, whether fermentation had started,
+  the vessel id and its states before and after, and the abort timestamp.
+  Completed and aborted runs, including their abort snapshot, are immutable.
+- Aborting before fermentation starts releases the vessel to available
+  immediately; aborting after the formal start schedules the vessel for
+  cleaning without losing its run association. These automatic routing rules
+  are unchanged and are recorded, not chosen, in the abort snapshot.
+- Aborts are atomic. A stale `X-Expected-Version`, an unknown run, an abort of
+  a completed or already aborted run, or an invalid structured entry fails
+  without any partial change to the run, its snapshot, or the vessel.
 - A run can carry at most 500 observations.
 
 ### GravityObservation
@@ -150,6 +170,29 @@ transitions return stable failures without changing persisted state.
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
 
+### 4. Abort And Vessel Release
+
+Public entry points are:
+
+- `POST /v1/runs/{id}/abort`
+- `GET /v1/runs/{id}`
+- `GET /v1/runs`
+- `GET /v1/vessels/{id}`
+- `GET /v1/vessels`
+- `POST /v1/vessels/{id}/finish-cleaning`
+
+The operator aborts a reserved or started run with a structured body naming
+the reason and the planned-volume disposition. The abort snapshot is fixed in
+the same atomic revision as the vessel routing. A pre-start abort releases the
+vessel immediately; a post-start abort keeps the run association and schedules
+cleaning, which the operator finishes later. The run detail, the run list, the
+vessel detail, and the vessel list all render the same abort outcome. A
+missing run, a stale version, a repeated abort, and an invalid structured
+entry fail atomically without partial writes.
+
+This path crosses HTTP protocol handling, application orchestration, domain
+validation, snapshot storage, and resource lifecycle.
+
 ## Modules
 
 - `cmd/fermentctl`: executable entry point for the HTTP service and bounded
@@ -210,13 +253,14 @@ task owns systematic tests for validation boundaries, state transitions,
 numeric calculations, stale revisions, storage failures, and concurrent
 reservation attempts.
 
-The current build command is `go build ./...`. Three bounded production checks
+The current build command is `go build ./...`. Four bounded production checks
 start the real HTTP handler, issue real JSON requests, check success and failure
 behavior, and exit without external services:
 
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check abort-cleaning`
 
 ## Scope Limits
 

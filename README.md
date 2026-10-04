@@ -107,6 +107,40 @@ shape:
 }
 ```
 
+### Structured Aborts
+
+`POST /v1/runs/{id}/abort` requires a JSON body (version pinned with
+`X-Expected-Version`):
+
+```json
+{
+  "reason_code": "contamination",
+  "reason_detail": "film on the surface",
+  "lost_volume_liters": 60,
+  "recovered_volume_liters": 100,
+  "recovery_destination": "separated_for_distilling",
+  "recovery_note": "sent to the stripping still"
+}
+```
+
+- `reason_code`: one of `contamination`, `off_flavor`,
+  `stalled_fermentation`, `equipment_failure`, `process_error`, `other`.
+  `other` requires a non-empty `reason_detail`.
+- `lost_volume_liters` and `recovered_volume_liters` are non-negative and
+  together cannot exceed the run's planned volume; the balance is returned as
+  `unaccounted_volume_liters` in the fixed abort snapshot.
+- `recovery_destination` is required exactly when a positive volume was
+  recovered: `reworked_to_blend`, `separated_for_distilling`,
+  `diverted_to_waste`, `held_for_qa_review`, or `released_as_second_product`.
+
+The response returns the updated run (with the immutable `abort` snapshot) and,
+when the run reserved a vessel, the vessel view. Aborting before the formal
+start releases the vessel to `available`; aborting after start schedules it for
+`cleaning` and keeps the run association until `finish-cleaning`. Vessel detail
+and list responses embed an `active_run` summary (including the abort reason)
+while the association exists. Stale versions (`412`), missing runs (`404`),
+and repeated or otherwise invalid aborts (`409`/`400`) fail atomically.
+
 ## Workflow Checks
 
 Run each production workflow check separately:
@@ -115,6 +149,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check abort-cleaning
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
